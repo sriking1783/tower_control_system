@@ -48,5 +48,5 @@ async def flight_generator_worker(queue: asyncio.Queue, spawn_rate_seconds: floa
         
         # Safely push the payload into the asyncio communication channel
         await queue.put(new_flight)
-        print(f"[SPAWNER] New flight {new_flight.flight_id} ({new_flight.aircraft_type.name}) entered airspace. Fuel: {new_flight.fuel_remaining}%")
+        print(f"[SPAWNER] New flight {new_flight.flight_id} ({new_flight.aircraft_type.name}) entered airspace.%")
         await asyncio.sleep(spawn_rate_seconds)
