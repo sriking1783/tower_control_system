@@ -1,0 +1,15 @@
+# Core Concurrency & Game Loop
+asyncio>=3.4.3
+
+# Networking & Distributed Messaging (ActiveMQ)
+stomp.py>=8.1.0
+
+# Serialization & High-Performance Data Payloads
+protobuf>=4.25.0
+
+# Database Persistence (PostgreSQL Async Driver)
+asyncpg>=0.29.0
+
+# Code Quality & Formatting (Optional but highly recommended)
+black>=24.0.0
+flake8>=7.0.0
