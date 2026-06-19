@@ -43,6 +43,7 @@ class Flight:
             return "UNKNOWN"
         
         return self.assigned_route[self.current_node_index]
+        
     
 
     
