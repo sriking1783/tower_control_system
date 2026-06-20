@@ -16,33 +16,22 @@ class FlightState(Enum):
 
 
 class AircraftType(Enum):
-    LIGHT_PROP = 5       # 5-seater (e.g., Cessna, Piper) - Quick turnaround, low fuel requirements.
-    REGIONAL_JET = 20    # 20-seater (e.g., Twin Otter, Jetstream) - Fast commuter hops.
-    NARROW_BODY = 100    # 100-seater (e.g., Boeing 717, Embraer 190) - Standard commercial workhorse.
-    WIDE_BODY = 500      # 500-seater (e.g., Airbus A380, Boeing 747) - High bottleneck risk, massive fuel load.
+    LIGHT_PROP = auto()
+    REGIONAL_JET = auto()
+    NARROW_BODY = auto()
+    WIDE_BODY = auto()
+    
 
 
 
-@dataclass
 class Flight:
-    flight_id: str
-    aircraft_type: AircraftType
-    state: FlightState 
-    
-    # Spatial Navigation Tracker
-    # Represented as string node identifiers (e.g., ["Node_A", "Node_B", "Gate_3"])
-    assigned_route: List[str]
-    current_node_index: int
-    
-    # # Fuel Constraints (Acts as a priority weight in the system scheduler)
-    # fuel_remaining: int = 100  # Percentage or units remaining
-    
-    @property
-    def current_location(self):
-        if not self.assigned_route:
-            return "UNKNOWN"
+    def __init__(self, flight_id: str, aircraft_type: AircraftType, initial_location: str):
+        self.flight_id = flight_id
+        self.aircraft_type = aircraft_type
+        self.state = FlightState.AIRSPACE
         
-        return self.assigned_route[self.current_node_index]
+        # Track position by the current node's string identifier key
+        self.current_location: str = initial_location 
 
 
 class ResourceType(Enum):

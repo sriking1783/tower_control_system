@@ -1,53 +1,53 @@
 import asyncio
 from typing import Dict, List, Optional
-from models import Flight, FlightState
+from models import Flight, FlightState, AirportNetwork, ResourceType
 from engine import flight_generator_worker
+from router import Router
 
 # Shared state memory tracking all active flights in our sky/ground network
 active_flights: Dict[str, Flight] = {}
 
-STATE_MAP = {
-    0: FlightState.AIRSPACE,
-    1: FlightState.HOLDING,
-    2: FlightState.LANDING,
-    3: FlightState.TAXI_TO_GATE,
-    4: FlightState.GATE_DEPLANING,
-    5: FlightState.TAXI_TO_RUNWAY,
-    6: FlightState.TAKEOFF
+# 1. Instantiate the Master Topology Graph
+airport_network = AirportNetwork()
+
+# 2. Build the live occupancy tracking registry dynamically from graph node names
+registry: Dict[str, List[str]] = {node_name: [] for node_name in airport_network.nodes}
+
+NODE_STATE_MAP = {
+    "Airspace_Alpha": FlightState.AIRSPACE,
+    "Runway_09R":     FlightState.LANDING,
+    "Gate_C4":        FlightState.GATE_DEPLANING,
+    "Gate_E1":        FlightState.GATE_DEPLANING,
+    "Taxiway_Zulu":   FlightState.TAXI_TO_RUNWAY,
+    "Runway_09L":     FlightState.TAKEOFF,
+    "Departure_Hub":  FlightState.TAKEOFF,
 }
 
-RESOURCE_CONFIGS = {
-    "Airspace_Alpha": {"max_capacity": 999, "type": "PIPELINE"},
-    "Holding_Pattern_North": {"max_capacity": 999, "type": "PIPELINE"},
-    "Runway_09R": {"max_capacity": 1, "type": "MONOLITHIC"},
-    "Taxiway_Kilo": {"max_capacity": 3, "type": "PIPELINE"},
-    "Gate_C4": {"max_capacity": 1, "type": "MONOLITHIC"},
-    "Taxiway_Zulu": {"max_capacity": 3, "type": "PIPELINE"},
-    "Runway_09L": {"max_capacity": 1, "type": "MONOLITHIC"},
-    "Departure_Corridor": {"max_capacity": 999, "type": "PIPELINE"},
-}
 
-# The active global tracking registry containing lists of flight IDs currently in those nodes
-registry: Dict[str, List[str]] = {node: [] for node in RESOURCE_CONFIGS}
-
-async def acquire_spatial_resources(flight: Flight, current_idx: int, next_idx: int) -> bool:
-    route = flight.assigned_route
-    next_node = route[next_idx]
+async def acquire_graph_resources(flight: Flight, target_node_name: str) -> bool:
+    """
+    Evaluates real-time node availability.
+    Implements Approach B (Moving Bubble) for monolithic runway segments:
+    Looks ahead at downstream destinations to prevent gridlock or high-speed collisions.
+    """
+    target_node = airport_network.nodes[target_node_name]
     
-    # Verify if the immediate target node has open capacity
-    if len(registry[next_node]) >= RESOURCE_CONFIGS[next_node]["max_capacity"]:
+    # Rule 1: Verify immediate capacity limits
+    if len(registry[target_node_name]) >= target_node.max_capacity:
         return False
     
-    # APPROACH B (Moving Bubble look-ahead): If entering a high-speed resource (Runway),
-    # check if the segment *after* that is also clear to preserve deceleration/acceleration length.
-    if RESOURCE_CONFIGS[next_node]["type"] == "MONOLITHIC" and (next_idx + 1) < len(route):
-        lookahead_node = route[next_idx + 1]
-        if len(registry[lookahead_node]) >= RESOURCE_CONFIGS[lookahead_node]["max_capacity"]:
+    # Rule 2: Moving Bubble look-ahead safety buffer
+    # If stepping onto a landing or takeoff runway, check if the paths exiting it are completely locked up
+    if target_node.resource_type == ResourceType.MONOLITHIC and "Runway" in target_node_name:
+        downstream_options = target_node.destinations
+        # If all paths leading out of this runway are completely backed up to maximum capacity, 
+        # deny permission to enter the runway block to prevent gridlock.
+        if downstream_options and all(len(registry[opt.name]) >= opt.max_capacity for opt in downstream_options):
             return False
     
-    # All checks passed! Execute transaction bookings
-    registry[next_node].append(flight.flight_id)
+    registry[target_node_name].append(flight.flight_id)
     return True
+        
 
 
 
@@ -57,64 +57,71 @@ async def manage_flight_lifecycle(flight: Flight):
     stepping linearly through its track route.
     """
     flight_id = flight.flight_id
-    route = flight.assigned_route
+    # Bootstrap Entry: Place the flight onto its initial starting position
+    if flight_id not in registry[flight.current_location]:
+        registry[flight.current_location].append(flight_id)
     
-    # Bootstrap entry: Pre-seed the initial spawn node ("Airspace_Alpha")
-    registry[route[0]].append(flight_id)
     
-    
-    while flight.current_node_index < len(flight.assigned_route):
-        current_node = flight.assigned_route[flight.current_node_index]
-        next_node_index = flight.current_node_index + 1
-        
-        # Determine if we have another node to step onto
-        if next_node_index < len(route):
-            next_node = route[next_node_index]
-            
-            # Async Spin-Lock / Auto-Brake loop: Pause execution safely until path is acquired
-            while not await acquire_spatial_resources(flight, flight.current_node_index, next_node_index):
-                await asyncio.sleep(0.5) # Yield core back to event loop, wait 500ms, retry
-            
-            # Two-Phase Lock Step: We have booked the next node! Now we clear out of the previous one
-            if flight_id in registry[current_node]:
-                registry[current_node].remove(flight_id)
-            
-            # Physically advance index position
-            flight.current_node_index = next_node_index
-            current_node = next_node
-        else:
-            if flight_id in registry[current_node]:
-                registry[current_node].remove(flight_id)
+    while True:
+        current_node_name = flight.current_location
+        current_node_obj = airport_network.nodes[current_node_name]
+        # 1. Check for Absolute Edge Nodes (End of the entire Airport Graph)
+        # We look at the static graph structure itself, NOT the live runtime options!
+        if not current_node_obj.destinations:
+            # We are at Departure_Hub. Clean up and exit.
+            if flight_id in registry[current_node_name]:
+                registry[current_node_name].remove(flight_id)
             break
         
-        # State updates
-        # 1. Update state classification based on track positioning
-        if flight.current_node_index in STATE_MAP:
-            # Only skip mapping if we are sitting at the Gate node (Index 4) 
-            # so our custom Deplaning -> Boarding split can run uninterrupted
-            if flight.state != FlightState.GATE_BOARDING:
-                flight.state = STATE_MAP[flight.current_node_index]
-        
-        
-        print(f"[{flight_id}] Status: {flight.state.name} | Location: {current_node}")
-        
-        # 2. Simulate node action overhead (Time spent consuming the sector resource)
-        if flight.state == FlightState.GATE_DEPLANING:
-            # Simulate passenger turnaround
-            await asyncio.sleep(2.0)
-            flight.state = FlightState.GATE_BOARDING
-            print(f"[{flight_id}] Status: {flight.state.name} | Location: {current_node} (Turnaround complete)")
-            await asyncio.sleep(2.0)
+        # 2. Query live options based on current runtime airport traffic
+        forward_options = Router.get_valid_next_options(airport_network, current_node_name)
+        target_node_name = Router.select_optimal_next_node(flight, forward_options, registry)
+
+        # 3. Hold/Brake Lock: If forward options exist but are packed solid, wait.
+        if target_node_name is None:
+            if flight.state != FlightState.HOLDING and current_node_name == "Airspace_Alpha":
+                flight.state = FlightState.HOLDING
+                print(f"[{flight_id}] State: {flight.state.name:<15} | Location: {current_node_name:<22} | Pattern holding...")
+            await asyncio.sleep(0.5)
+            continue
+
+        # 4. Atomic Two-Phase Lock Transaction Step
+        if await acquire_graph_resources(flight, target_node_name):
+            # Crucial: Remove yourself from the old node's registry array BEFORE updating your location
+            if flight_id in registry[current_node_name]:
+                registry[current_node_name].remove(flight_id)
+            
+            # Commit the step forward
+            flight.current_location = target_node_name
+            current_node_name = target_node_name
         else:
-            # General transit time through basic airspace/taxi segments
-            await asyncio.sleep(1.5)
-        
-    
-    # 4. Cleanup flight upon leaving the final segment ("Departure_Corridor")
+            # Back-off retry lock delay
+            await asyncio.sleep(0.5)
+            continue
+
+        # 5. Continuous State Synchronization
+        if current_node_name in NODE_STATE_MAP and flight.state != FlightState.GATE_BOARDING:
+            flight.state = NODE_STATE_MAP[current_node_name]
+
+        print(f"[{flight_id}] State: {flight.state.name:<15} | Location: {current_node_name:<22} | Line: {str(registry[current_node_name]):<25}")
+
+        # 6. Operational Transit & Handling Delay Engine
+        if "Gate" in current_node_name:
+            await asyncio.sleep(2.0)  # Deplaning operational delay
+            flight.state = FlightState.GATE_BOARDING
+            print(f"[{flight_id}] State: {flight.state.name:<15} | Location: {current_node_name:<22} | Turnaround Complete")
+            await asyncio.sleep(2.0)  # Boarding operational delay
+        elif flight.state == FlightState.TAKEOFF:
+            await asyncio.sleep(1.0)  # High-speed runway run
+        else:
+            await asyncio.sleep(1.5)  # General taxiway taxiing speed delay
+
+    # Final trace cleanup upon hitting absolute graph exit node boundary
     if flight_id in active_flights:
         del active_flights[flight_id]
+    print(f"[{flight_id}] Cleared corridor. Active system pool size: {len(active_flights)}")
+            
     
-    print(f"[{flight_id}] Has cleared the departure corridor. Purged from memory. Active pool size: {len(active_flights)}")
 
 
 async def engine_orchestrator(queue: asyncio.Queue):
@@ -137,14 +144,13 @@ async def engine_orchestrator(queue: asyncio.Queue):
     
 
 async def main():
-    # Central communications queue connecting the spawner to the runtime orchestrator
+    # 1. Boot up the topology graph blueprint
     flight_ingestion_queue = asyncio.Queue()
-    
-    print("[SYSTEM] Booting Air Traffic Operations Control Engine Hub...")
+    print("[SYSTEM] Booting Dynamic Graph Network Air Traffic Controller Engine...")
     
     # Run the background generator and orchestrator side-by-side
     await asyncio.gather(
-        flight_generator_worker(flight_ingestion_queue, spawn_rate_seconds=4.0),
+        flight_generator_worker(flight_ingestion_queue, spawn_rate_seconds=2.5),
         engine_orchestrator(flight_ingestion_queue)
     )
 

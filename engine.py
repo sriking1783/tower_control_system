@@ -41,9 +41,7 @@ async def flight_generator_worker(queue: asyncio.Queue, spawn_rate_seconds: floa
         new_flight = Flight(
             flight_id = flight_id,
             aircraft_type = aircraft_type,
-            state = FlightState.AIRSPACE,
-            assigned_route=MOCK_ROUTE.copy(),
-            current_node_index=0,
+            initial_location="Airspace_Alpha" 
         )
         
         # Safely push the payload into the asyncio communication channel
