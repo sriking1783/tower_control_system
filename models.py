@@ -1,6 +1,6 @@
 from enum import Enum, auto
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 class FlightState(Enum):
     """The strict lifecycle states of an aircraft process."""
@@ -43,6 +43,51 @@ class Flight:
             return "UNKNOWN"
         
         return self.assigned_route[self.current_node_index]
+
+
+class ResourceType(Enum):
+    PIPELINE = auto()  # Can hold multiple aircraft sequentially (taxiways)
+    MONOLITHIC = auto() # Exclusive lock required (runways, gates)
+
+class AirportNode:
+    def __init__(self, name: str, resource_type: ResourceType, max_capacity: int):
+        self.name: str = name
+        self.resource_type: ResourceType = resource_type
+        self.max_capacity: int = max_capacity
+        
+        # Graph connections: Edges out of this node to other node objects
+        self.destinations: List['AirportNode'] = []
+        
+    def add_connection(self, target_node: 'AirportNode'):
+        """Adds a valid one-way movement path from this node to another."""
+        if target_node not in self.destinations:
+            self.destinations.append(target_node)
+
+    def __repr__(self):
+        return f"<Node: {self.name}>"
+
+
+# Added to models.py
+class AirportNetwork:
+    def __init__(self):
+        self.nodes: Dict[str, AirportNode] = {
+            "Airspace_Alpha": AirportNode("Airspace_Alpha", ResourceType.PIPELINE, 999),
+            "Runway_09R":     AirportNode("Runway_09R",     ResourceType.MONOLITHIC, 1),
+            "Gate_C4":        AirportNode("Gate_C4",        ResourceType.MONOLITHIC, 1),
+            "Gate_E1":        AirportNode("Gate_E1",        ResourceType.MONOLITHIC, 1),
+            "Taxiway_Zulu":   AirportNode("Taxiway_Zulu",   ResourceType.PIPELINE, 3),
+            "Runway_09L":     AirportNode("Runway_09L",     ResourceType.MONOLITHIC, 1),
+            "Departure_Hub":  AirportNode("Departure_Hub",  ResourceType.PIPELINE, 999)
+        }
+        
+        # Wire the Directed Graph Connections
+        self.nodes["Airspace_Alpha"].add_connection(self.nodes["Runway_09R"])
+        self.nodes["Runway_09R"].add_connection(self.nodes["Gate_C4"])
+        self.nodes["Runway_09R"].add_connection(self.nodes["Gate_E1"])
+        self.nodes["Gate_C4"].add_connection(self.nodes["Taxiway_Zulu"])
+        self.nodes["Gate_E1"].add_connection(self.nodes["Taxiway_Zulu"])
+        self.nodes["Taxiway_Zulu"].add_connection(self.nodes["Runway_09L"])
+        self.nodes["Runway_09L"].add_connection(self.nodes["Departure_Hub"])
         
     
 
