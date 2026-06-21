@@ -58,25 +58,29 @@ class AirportNode:
 
 # Added to models.py
 class AirportNetwork:
-    def __init__(self):
-        self.nodes: Dict[str, AirportNode] = {
-            "Airspace_Alpha": AirportNode("Airspace_Alpha", ResourceType.PIPELINE, 999),
-            "Runway_09R":     AirportNode("Runway_09R",     ResourceType.MONOLITHIC, 1),
-            "Gate_C4":        AirportNode("Gate_C4",        ResourceType.MONOLITHIC, 1),
-            "Gate_E1":        AirportNode("Gate_E1",        ResourceType.MONOLITHIC, 1),
-            "Taxiway_Zulu":   AirportNode("Taxiway_Zulu",   ResourceType.PIPELINE, 3),
-            "Runway_09L":     AirportNode("Runway_09L",     ResourceType.MONOLITHIC, 1),
-            "Departure_Hub":  AirportNode("Departure_Hub",  ResourceType.PIPELINE, 999)
-        }
-        
-        # Wire the Directed Graph Connections
-        self.nodes["Airspace_Alpha"].add_connection(self.nodes["Runway_09R"])
-        self.nodes["Runway_09R"].add_connection(self.nodes["Gate_C4"])
-        self.nodes["Runway_09R"].add_connection(self.nodes["Gate_E1"])
-        self.nodes["Gate_C4"].add_connection(self.nodes["Taxiway_Zulu"])
-        self.nodes["Gate_E1"].add_connection(self.nodes["Taxiway_Zulu"])
-        self.nodes["Taxiway_Zulu"].add_connection(self.nodes["Runway_09L"])
-        self.nodes["Runway_09L"].add_connection(self.nodes["Departure_Hub"])
+    def __init__(self, nodes: Dict[str, AirportNode] = None):
+        if nodes is not None:
+            # If we pass a custom graph (like in tests), use it!
+            self.nodes = nodes
+        else:
+            self.nodes: Dict[str, AirportNode] = {
+                "Airspace_Alpha": AirportNode("Airspace_Alpha", ResourceType.PIPELINE, 999),
+                "Runway_09R":     AirportNode("Runway_09R",     ResourceType.MONOLITHIC, 1),
+                "Gate_C4":        AirportNode("Gate_C4",        ResourceType.MONOLITHIC, 1),
+                "Gate_E1":        AirportNode("Gate_E1",        ResourceType.MONOLITHIC, 1),
+                "Taxiway_Zulu":   AirportNode("Taxiway_Zulu",   ResourceType.PIPELINE, 3),
+                "Runway_09L":     AirportNode("Runway_09L",     ResourceType.MONOLITHIC, 1),
+                "Departure_Hub":  AirportNode("Departure_Hub",  ResourceType.PIPELINE, 999)
+            }
+            
+            # Wire the Directed Graph Connections
+            self.nodes["Airspace_Alpha"].add_connection(self.nodes["Runway_09R"])
+            self.nodes["Runway_09R"].add_connection(self.nodes["Gate_C4"])
+            self.nodes["Runway_09R"].add_connection(self.nodes["Gate_E1"])
+            self.nodes["Gate_C4"].add_connection(self.nodes["Taxiway_Zulu"])
+            self.nodes["Gate_E1"].add_connection(self.nodes["Taxiway_Zulu"])
+            self.nodes["Taxiway_Zulu"].add_connection(self.nodes["Runway_09L"])
+            self.nodes["Runway_09L"].add_connection(self.nodes["Departure_Hub"])
         
     
 
