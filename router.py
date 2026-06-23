@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional
-from models import AirportNetwork, AirportNode, Flight
+from models import AirportNetwork, AirportNode, Flight, ResourceType, Gate
 
 class Router:
     @staticmethod
@@ -25,12 +25,18 @@ class Router:
         # Core Balancing Decision Matrix (e.g., branching out at Runway_09R to choose a gate)
         best_node = None
         lowest_load = float("inf")
+        highest_passenger_gate = None
+        max_passengers = -1
         
         for node in options:
             current_occupancy = len(live_registry[node.name])
             max_capacity = node.max_capacity
-            
-            if current_occupancy >= max_capacity:
+            if isinstance(node, Gate):
+                if node.passenger_count > max_passengers:
+                    max_passengers = node.passenger_count
+                    highest_passenger_gate = node
+ 
+            if current_occupancy >= max_capacity and node.resource_type == ResourceType.MONOLITHIC:
                 continue
                 
             # Load balancing heuristic: Pick the gate with the absolute fewest planes
@@ -38,9 +44,16 @@ class Router:
                 lowest_load = current_occupancy
                 best_node = node
         
-        # Fallback Strategy: If all forward gates/routes are entirely full, 
-        # return None to trigger the plane's brake mechanism.
-        return best_node.name if best_node else None
+        # Rule A: If we found a valid, non-full node, route to it immediately!
+        if best_node:
+            return best_node.name
+            
+        # Rule B: Fallback Strategy - If ALL nodes are full, queue behind the gate clearing out the most people
+        if highest_passenger_gate:
+            return highest_passenger_gate.name
+            
+        # Rule C: If all choices are full and none are gates (e.g. all are full runways), activate brakes
+        return None
         
         
         

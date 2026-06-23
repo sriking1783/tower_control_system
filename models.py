@@ -1,6 +1,7 @@
 from enum import Enum, auto
 from dataclasses import dataclass
 from typing import List, Optional, Dict
+from dataclasses import dataclass, field
 
 class FlightState(Enum):
     """The strict lifecycle states of an aircraft process."""
@@ -38,14 +39,12 @@ class ResourceType(Enum):
     PIPELINE = auto()  # Can hold multiple aircraft sequentially (taxiways)
     MONOLITHIC = auto() # Exclusive lock required (runways, gates)
 
+@dataclass
 class AirportNode:
-    def __init__(self, name: str, resource_type: ResourceType, max_capacity: int):
-        self.name: str = name
-        self.resource_type: ResourceType = resource_type
-        self.max_capacity: int = max_capacity
-        
-        # Graph connections: Edges out of this node to other node objects
-        self.destinations: List['AirportNode'] = []
+    name: str
+    resource_type: ResourceType
+    max_capacity: int
+    destinations: List['AirportNode'] = field(default_factory=list)
         
     def add_connection(self, target_node: 'AirportNode'):
         """Adds a valid one-way movement path from this node to another."""
@@ -54,6 +53,16 @@ class AirportNode:
 
     def __repr__(self):
         return f"<Node: {self.name}>"
+
+@dataclass
+class Gate(AirportNode):
+    # This attribute ONLY exists on Gates!
+    passenger_count: int = 0 
+
+@dataclass
+class Runway(AirportNode):
+    # You can add Runway-specific properties here later (like wind directions, length, etc.)
+    pass 
 
 
 # Added to models.py
@@ -66,8 +75,8 @@ class AirportNetwork:
             self.nodes: Dict[str, AirportNode] = {
                 "Airspace_Alpha": AirportNode("Airspace_Alpha", ResourceType.PIPELINE, 999),
                 "Runway_09R":     AirportNode("Runway_09R",     ResourceType.MONOLITHIC, 1),
-                "Gate_C4":        AirportNode("Gate_C4",        ResourceType.MONOLITHIC, 1),
-                "Gate_E1":        AirportNode("Gate_E1",        ResourceType.MONOLITHIC, 1),
+                "Gate_C4":        Gate(name="Gate_C4",        resource_type=ResourceType.PIPELINE, max_capacity=1, passenger_count=250),
+                "Gate_E1":        Gate(name="Gate_E1",        resource_type=ResourceType.PIPELINE, max_capacity=1, passenger_count=200),
                 "Taxiway_Zulu":   AirportNode("Taxiway_Zulu",   ResourceType.PIPELINE, 3),
                 "Runway_09L":     AirportNode("Runway_09L",     ResourceType.MONOLITHIC, 1),
                 "Departure_Hub":  AirportNode("Departure_Hub",  ResourceType.PIPELINE, 999)
