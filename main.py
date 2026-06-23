@@ -23,7 +23,7 @@ async def acquire_graph_resources(flight: Flight, target_node_name: str) -> bool
     Looks ahead at downstream destinations to prevent gridlock or high-speed collisions.
     """
     target_node = state.airport_network.nodes[target_node_name]
-    
+   
     # Rule 1: Verify immediate capacity limits
     if len(state.registry[target_node_name]) >= target_node.max_capacity:
         return False
@@ -32,9 +32,13 @@ async def acquire_graph_resources(flight: Flight, target_node_name: str) -> bool
     # If stepping onto a landing or takeoff runway, check if the paths exiting it are completely locked up
     if target_node.resource_type == ResourceType.MONOLITHIC and "Runway" in target_node_name:
         downstream_options = target_node.destinations
+        downstream_runways = [
+            opt for opt in downstream_options 
+            if "Runway" in opt.name or opt.resource_type == ResourceType.MONOLITHIC
+        ]
         # If all paths leading out of this runway are completely backed up to maximum capacity, 
         # deny permission to enter the runway block to prevent gridlock.
-        if downstream_options and all(len(state.registry[opt.name]) >= opt.max_capacity for opt in downstream_options):
+        if downstream_runways and all(len(state.registry[opt.name]) >= opt.max_capacity for opt in downstream_runways):
             return False
     
     state.registry[target_node_name].append(flight.flight_id)
