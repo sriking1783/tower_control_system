@@ -36,7 +36,7 @@ def test_one_option():
 @pytest.mark.asyncio
 async def test_two_options():
     # 1. Arrange
-    state.registry.clear()
+    state.global_simulation_state.registry.clear()
     
     # Configure Gate C4 (Full)
     mock_gate_c4 = MagicMock(spec=Gate)
@@ -44,7 +44,7 @@ async def test_two_options():
     mock_gate_c4.max_capacity = 1
     mock_gate_c4.passenger_count = 450
     mock_gate_c4.resource_type = ResourceType.PIPELINE
-    state.registry["Gate_C4"] = ["HAWAIIAN_50"] # Occupied
+    state.global_simulation_state.registry["Gate_C4"] = ["HAWAIIAN_50"] # Occupied
 
     # Configure Gate E1 (Available)
     mock_gate_e1 = MagicMock(spec=Gate)
@@ -52,7 +52,7 @@ async def test_two_options():
     mock_gate_e1.max_capacity = 1
     mock_gate_e1.passenger_count = 350  # Fixed typo here!
     mock_gate_e1.resource_type = ResourceType.PIPELINE
-    state.registry["Gate_E1"] = [] # Empty
+    state.global_simulation_state.registry["Gate_E1"] = [] # Empty
     
     # Mock Flight
     mock_incoming_flight = MagicMock()
@@ -64,7 +64,7 @@ async def test_two_options():
     selected_node = Router.select_optimal_next_node(
         mock_incoming_flight, 
         destinations, 
-        state.registry
+        state.global_simulation_state.registry
     )
     
     # 3. Assert
@@ -75,14 +75,14 @@ async def test_two_options():
 @pytest.mark.asyncio
 async def test_two_options_queue():
     # 1. Clear out the global tracking registry cleanly
-    state.registry.clear()
+    state.global_simulation_state.registry.clear()
     mock_gate_c4 = MagicMock(spec=Gate)
     mock_gate_c4.name = "Gate_C4"
     mock_gate_c4.max_capacity = 1
     mock_gate_c4.passenger_count = 200
     mock_gate_c4.resource_type = ResourceType.PIPELINE
     
-    state.registry["Gate_C4"] = ["HAWAIIAN_50"]
+    state.global_simulation_state.registry["Gate_C4"] = ["HAWAIIAN_50"]
 
     mock_incoming_flight = MagicMock(flight_id="DELTA_101")
     result = await acquire_graph_resources(mock_incoming_flight, "Gate_C4")
@@ -96,7 +96,7 @@ async def test_two_options_queue():
     mock_gate_e1.max_capacity = 1
     mock_gate_e1.resource_type = ResourceType.PIPELINE
     mock_gate_e1.passenger_count = 250
-    state.registry["Gate_E1"] = ["DELTA_65"]
+    state.global_simulation_state.registry["Gate_E1"] = ["DELTA_65"]
 
     result = await acquire_graph_resources(mock_incoming_flight, "Gate_E1")
 
@@ -106,4 +106,4 @@ async def test_two_options_queue():
     
     destinations = [mock_gate_c4, mock_gate_e1]
 
-    assert "Gate_C4" == Router.select_optimal_next_node(mock_incoming_flight, destinations, state.registry)
+    assert "Gate_C4" == Router.select_optimal_next_node(mock_incoming_flight, destinations, state.global_simulation_state.registry)

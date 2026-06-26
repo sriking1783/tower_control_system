@@ -22,7 +22,27 @@ class AircraftType(Enum):
     NARROW_BODY = auto()
     WIDE_BODY = auto()
     
+AIRCRAFT_CAPACITY_MAP = {
+    AircraftType.LIGHT_PROP: 5,
+    AircraftType.REGIONAL_JET: 50,
+    AircraftType.NARROW_BODY: 200,
+    AircraftType.WIDE_BODY: 500,
+}
 
+class GlobalSimulationState:
+    def __init__(self):
+        # Tracks aircraft locations
+        self.registry = {
+            "Airspace_Alpha": [], "Gate_C4": [], "Gate_E1": [], 
+            "Taxiway_Zulu": [], "Runway_09L": [], "Departure_Hub": []
+        }
+        self.active_flights = {}
+        
+        # NEW: Tracks how many passengers are sitting in the chairs at each gate lounge
+        self.gate_passenger_pool = {
+            "Gate_C4": 120,   # 120 passengers waiting at C4
+            "Gate_E1": 15     # Only 15 passengers waiting at E1 (this one will stall!)
+        }
 
 
 class Flight:
@@ -33,6 +53,8 @@ class Flight:
         
         # Track position by the current node's string identifier key
         self.current_location: str = initial_location 
+        self.max_capacity = AIRCRAFT_CAPACITY_MAP[aircraft_type]
+        self.passengers_onboard = 0
 
 
 class ResourceType(Enum):
