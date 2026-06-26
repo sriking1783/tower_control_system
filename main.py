@@ -122,7 +122,9 @@ async def manage_flight_lifecycle(flight: Flight):
         # 6. Operational Transit & Handling Delay Engine
         if "Gate" in current_node_name:
             # await asyncio.sleep(2.0)  # Deplaning operational delay
-            flight.state = FlightState.GATE_BOARDING
+            if flight.state != FlightState.GATE_BOARDING:
+                flight.state = FlightState.GATE_BOARDING
+                print(f"[{flight_id}] State: {flight.state.name:<15} | Location: {current_node_name:<22} | Boarding Initialized.")
             
             print(f"[{flight_id}] State: {flight.state.name:<15} | Location: {current_node_name:<22} | Turnaround Complete")
             available_at_gate = state.global_simulation_state.gate_passenger_pool.get(current_node_name, 0)
