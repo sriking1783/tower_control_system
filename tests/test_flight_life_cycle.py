@@ -145,8 +145,7 @@ async def test_edge_node_cleanup_and_exit(mock_acquire, mock_router_cls, mock_st
     # Run lifecycle loop
     await manage_flight_lifecycle(flight)
 
-    breakpoint()
-    # 3. Assertions targeted accurately at the flight under test
+     # 3. Assertions targeted accurately at the flight under test
     assert target_flight_id not in local_state.registry["Departure_Hub"], "Registry failed to purge terminal footprint"
     assert target_flight_id not in local_state.active_flights, "Flight remained stranded in active tracking pool"
 
