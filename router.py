@@ -32,6 +32,8 @@ class Router:
             current_occupancy = len(live_registry[node.name])
             max_capacity = node.max_capacity
             if isinstance(node, Gate):
+                if node.passenger_count == 0:
+                    continue
                 if node.passenger_count > max_passengers:
                     max_passengers = node.passenger_count
                     highest_passenger_gate = node
