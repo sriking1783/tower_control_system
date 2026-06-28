@@ -61,25 +61,64 @@ class ResourceType(Enum):
     PIPELINE = auto()  # Can hold multiple aircraft sequentially (taxiways)
     MONOLITHIC = auto() # Exclusive lock required (runways, gates)
 
-@dataclass
+
 class AirportNode:
-    name: str
-    resource_type: ResourceType
-    max_capacity: int
-    destinations: List['AirportNode'] = field(default_factory=list)
+    def __init__(self, name: str, max_capacity: int, resource_type: ResourceType):
+        self.name = name
+        self.max_capacity = max_capacity
+        self.resource_type = resource_type
+        self.destinations = []
+        self.supports_fallback_queuing = False # Gates allow planes to stack up behind them
         
     def add_connection(self, target_node: 'AirportNode'):
         """Adds a valid one-way movement path from this node to another."""
         if target_node not in self.destinations:
             self.destinations.append(target_node)
+    
+    def calculate_routing_score(self, live_registry: Dict[str, List[str]]) -> float:
+        """
+        Base heuristic: Lower score is better. 
+        If full, return infinity to block routing.
+        """
+        current_occupancy = len(live_registry[self.name])
+        if current_occupancy >= self.max_capacity and self.resource_type == ResourceType.MONOLITHIC:
+            return float("inf")
+        
+        return float(current_occupancy)
+    
+    def get_fallback_priority(self) -> float:
+        """Higher return value means higher priority when queuing in gridlock."""
+        return 0.0
 
     def __repr__(self):
         return f"<Node: {self.name}>"
 
-@dataclass
 class Gate(AirportNode):
     # This attribute ONLY exists on Gates!
-    passenger_count: int = 0 
+    def __init__(self, name: str, max_capacity: int, resource_type: ResourceType, passenger_count: int):
+        self.name = name
+        self.max_capacity = max_capacity
+        self.resource_type = resource_type
+        self.destinations = []
+        self.passenger_count = passenger_count
+        self.supports_fallback_queuing = True # Gates allow planes to stack up behind them
+        
+    
+    def calculate_routing_score(self, live_registry: Dict[str, List[str]]) -> float:
+        """
+        Gate Override: Considers both plane occupancy and passenger demand.
+        """
+        current_occupancy = len(live_registry[self.name])
+        if current_occupancy >= self.max_capacity:
+            return float("inf")
+        if self.passenger_count == 0:
+            return float("inf")
+        
+        return float(current_occupancy) - (self.passenger_count * 0.1)
+    
+    def get_fallback_priority(self) -> float:
+        # Gates prioritize their fallback queue by passenger bottleneck size
+        return float(self.passenger_count)
 
 @dataclass
 class Runway(AirportNode):
@@ -97,8 +136,8 @@ class AirportNetwork:
             self.nodes: Dict[str, AirportNode] = {
                 "Airspace_Alpha": AirportNode("Airspace_Alpha", ResourceType.PIPELINE, 999),
                 "Runway_09R":     AirportNode("Runway_09R",     ResourceType.MONOLITHIC, 1),
-                "Gate_C4":        Gate(name="Gate_C4",        resource_type=ResourceType.PIPELINE, max_capacity=1, passenger_count=250),
-                "Gate_E1":        Gate(name="Gate_E1",        resource_type=ResourceType.PIPELINE, max_capacity=1, passenger_count=200),
+                "Gate_C4":        Gate(name="Gate_C4",        resource_type=ResourceType.MONOLITHIC, max_capacity=1, passenger_count=250),
+                "Gate_E1":        Gate(name="Gate_E1",        resource_type=ResourceType.MONOLITHIC, max_capacity=1, passenger_count=200),
                 "Taxiway_Zulu":   AirportNode("Taxiway_Zulu",   ResourceType.PIPELINE, 3),
                 "Runway_09L":     AirportNode("Runway_09L",     ResourceType.MONOLITHIC, 1),
                 "Departure_Hub":  AirportNode("Departure_Hub",  ResourceType.PIPELINE, 999)

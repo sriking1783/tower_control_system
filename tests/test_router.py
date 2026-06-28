@@ -39,26 +39,18 @@ async def test_two_options():
     state.global_simulation_state.registry.clear()
     
     # Configure Gate C4 (Full)
-    mock_gate_c4 = MagicMock(spec=Gate)
-    mock_gate_c4.name = "Gate_C4"
-    mock_gate_c4.max_capacity = 1
-    mock_gate_c4.passenger_count = 450
-    mock_gate_c4.resource_type = ResourceType.PIPELINE
+    gate_c4 = Gate(name="Gate_C4", max_capacity=1, passenger_count=450, resource_type=ResourceType.MONOLITHIC) 
     state.global_simulation_state.registry["Gate_C4"] = ["HAWAIIAN_50"] # Occupied
 
     # Configure Gate E1 (Available)
-    mock_gate_e1 = MagicMock(spec=Gate)
-    mock_gate_e1.name = "Gate_E1"
-    mock_gate_e1.max_capacity = 1
-    mock_gate_e1.passenger_count = 350  # Fixed typo here!
-    mock_gate_e1.resource_type = ResourceType.PIPELINE
+    gate_e1 = Gate(name="Gate_E1", max_capacity=1, passenger_count=350, resource_type=ResourceType.MONOLITHIC) 
     state.global_simulation_state.registry["Gate_E1"] = [] # Empty
     
     # Mock Flight
     mock_incoming_flight = MagicMock()
     mock_incoming_flight.flight_id = "DELTA_101"
     
-    destinations = [mock_gate_c4, mock_gate_e1]
+    destinations = [gate_c4, gate_e1]
     
     # 2. Act
     selected_node = Router.select_optimal_next_node(
@@ -74,36 +66,35 @@ async def test_two_options():
     
 @pytest.mark.asyncio
 async def test_two_options_queue():
-    # 1. Clear out the global tracking registry cleanly
+    # 1. Clear out the global tracking states cleanly
     state.global_simulation_state.registry.clear()
-    mock_gate_c4 = MagicMock(spec=Gate)
-    mock_gate_c4.name = "Gate_C4"
-    mock_gate_c4.max_capacity = 1
-    mock_gate_c4.passenger_count = 200
-    mock_gate_c4.resource_type = ResourceType.PIPELINE
     
-    state.global_simulation_state.registry["Gate_C4"] = ["HAWAIIAN_50"]
-
-    mock_incoming_flight = MagicMock(flight_id="DELTA_101")
-    result = await acquire_graph_resources(mock_incoming_flight, "Gate_C4")
+    # Instantiate nodes
+    gate_c4 = Gate(name="Gate_C4", max_capacity=1, passenger_count=200, resource_type=ResourceType.MONOLITHIC) 
+    gate_e1 = Gate(name="Gate_E1", max_capacity=1, passenger_count=250, resource_type=ResourceType.MONOLITHIC) 
+    
     mock_runway = MagicMock()
     mock_runway.name = "Runway"
     mock_runway.max_capacity = 1
     mock_runway.resource_type = ResourceType.MONOLITHIC
+    mock_runway.destinations = [gate_c4, gate_e1]
 
-    mock_gate_e1 = MagicMock(spec=Gate)
-    mock_gate_e1.name = "Gate_E1"
-    mock_gate_e1.max_capacity = 1
-    mock_gate_e1.resource_type = ResourceType.PIPELINE
-    mock_gate_e1.passenger_count = 250
+    # FIX: Initialize the graph nodes FIRST before calling any lifecycle functions
+    state.airport_network.nodes = {"Gate_E1": gate_e1, "Gate_C4": gate_c4, "Runway": mock_runway}
+    
+    # 2. Populate Registries
+    state.global_simulation_state.registry["Gate_C4"] = ["HAWAIIAN_50"]
     state.global_simulation_state.registry["Gate_E1"] = ["DELTA_65"]
 
-    result = await acquire_graph_resources(mock_incoming_flight, "Gate_E1")
+    # 3. Safe to call resources now that nodes exist!
+    mock_incoming_flight = MagicMock(flight_id="DELTA_101")
+    await acquire_graph_resources(mock_incoming_flight, "Gate_C4")
+    await acquire_graph_resources(mock_incoming_flight, "Gate_E1")
 
-    mock_runway.destinations = [mock_gate_c4, mock_gate_e1]
-    
-    state.airport_network.nodes = {"Gate_E1": mock_gate_e1, "Gate_C4": mock_gate_c4, "Runway": mock_runway}
-    
-    destinations = [mock_gate_c4, mock_gate_e1]
-
-    assert "Gate_C4" == Router.select_optimal_next_node(mock_incoming_flight, destinations, state.global_simulation_state.registry)
+    # 4. Route evaluation
+    destinations = [gate_c4, gate_e1]
+    assert "Gate_E1" == Router.select_optimal_next_node(
+        mock_incoming_flight, 
+        destinations, 
+        state.global_simulation_state.registry
+    )

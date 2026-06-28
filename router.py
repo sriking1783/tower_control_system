@@ -24,37 +24,28 @@ class Router:
         
         # Core Balancing Decision Matrix (e.g., branching out at Runway_09R to choose a gate)
         best_node = None
-        lowest_load = float("inf")
-        highest_passenger_gate = None
-        max_passengers = -1
+        fallback_options = []
+        lowest_score = float("inf")
         
         for node in options:
-            current_occupancy = len(live_registry[node.name])
-            max_capacity = node.max_capacity
-            if isinstance(node, Gate):
-                if node.passenger_count == 0:
-                    continue
-                if node.passenger_count > max_passengers:
-                    max_passengers = node.passenger_count
-                    highest_passenger_gate = node
- 
-            if current_occupancy >= max_capacity and node.resource_type == ResourceType.MONOLITHIC:
+            score = node.calculate_routing_score(live_registry)
+            # Track full gates for fallback evaluation
+            if score == float("inf") and node.supports_fallback_queuing:
+                fallback_options.append(node)
                 continue
-                
-            # Load balancing heuristic: Pick the gate with the absolute fewest planes
-            if current_occupancy < lowest_load:
-                lowest_load = current_occupancy
+            if score < lowest_score:
+                lowest_score = score
                 best_node = node
-        
-        # Rule A: If we found a valid, non-full node, route to it immediately!
-        if best_node:
+                
+        # Rule A: Return clearest path
+        if best_node and lowest_score != float("inf"):
             return best_node.name
             
-        # Rule B: Fallback Strategy - If ALL nodes are full, queue behind the gate clearing out the most people
-        if highest_passenger_gate:
-            return highest_passenger_gate.name
-            
-        # Rule C: If all choices are full and none are gates (e.g. all are full runways), activate brakes
+        # Rule B: Fallback - If all options are packed, pick the gate with the highest passenger bottleneck
+        if fallback_options:
+            fallback_options.sort(key=lambda g: g.passenger_count, reverse=True)
+            return fallback_options[0].name
+
         return None
         
         
