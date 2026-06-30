@@ -5,6 +5,9 @@ from engine import flight_generator_worker
 from router import Router
 import state
 import random
+from broker import ATCEventBroker
+from aio_pika import IncomingMessage
+import json
 
 async def acquire_graph_resources(flight: Flight, target_node_name: str) -> bool:
     """
@@ -15,7 +18,8 @@ async def acquire_graph_resources(flight: Flight, target_node_name: str) -> bool
     target_node = state.airport_network.nodes[target_node_name]
    
     # Rule 1: Verify immediate capacity limits
-    if len(state.global_simulation_state.registry[target_node_name]) >= target_node.max_capacity:
+    current_occupied = state.global_simulation_state.registry.setdefault(target_node_name, [])
+    if len(current_occupied) >= target_node.max_capacity:
         return False
     
     # Rule 2: Moving Bubble look-ahead safety buffer
@@ -152,34 +156,50 @@ async def manage_flight_lifecycle(flight: Flight):
     
 
 
-async def engine_orchestrator(queue: asyncio.Queue):
+async def engine_orchestrator(broker: ATCEventBroker):
     """
     Pulls raw entities off the streaming network ingestion queue and hands
     them off immediately to concurrent runtime processes.
     """
+    print("[ORCHESTRATOR] Subscribing to atc.inbound.ingest queue...")
+    async def on_message_received(message: IncomingMessage):
+        async with message.process():
+            try:
+                # 1. Deserialize binary payload back into your Pydantic Flight model
+                payload_dict = json.loads(message.body.decode())
+                new_flight = Flight.model_validate(payload_dict)
+                
+                state.global_simulation_state.active_flights[new_flight.flight_id] = new_flight
+                
+                asyncio.create_task(manage_flight_lifecycle(new_flight))
+                
+                print(f"[ORCHESTRATOR] Successfully delegated {new_flight.flight_id}")
+            except Exception as e:
+                print(f"[ORCHESTRATOR] Failed to process incoming message: {e}")
+                
+            
+    
+    # 4. Bind the handler to the RabbitMQ queue
+    # This replaces the 'while True' loop block!
+    await broker.start_consuming(queue_name="atc_inbound_ingest", callback=on_message_received)
+    
+    # 2. Keep this worker task alive indefinitely so the consumer doesn't drop
     while True:
-        # Blocks until a new flight payload enters the shared ingestion queue
-        new_flight: Flight = await queue.get()
-        
-        # Register flight to active memory tracking table
-        state.global_simulation_state.active_flights[new_flight.flight_id] = new_flight
-        
-        # Fire-and-forget: Spin up a lightweight concurrent green-thread for this plane
-        asyncio.create_task(manage_flight_lifecycle(new_flight))
-        
-        # Signal queue that processing initialization has completed successfully
-        queue.task_done()
+        await asyncio.sleep(3600)  # Sleep for an hour, looping infinitely
     
 
 async def main():
-    # 1. Boot up the topology graph blueprint
-    flight_ingestion_queue = asyncio.Queue()
     print("[SYSTEM] Booting Dynamic Graph Network Air Traffic Controller Engine...")
+    # 1. Boot up the topology graph blueprint
+    atc_broker = ATCEventBroker()
+    print("[SYSTEM] Booting Dynamic Graph Network Air Traffic Controller Engine...")
+    await atc_broker.connect()
+    print("[SYSTEM] Successfully connected to RabbitMQ Infrastructure Event Mesh.")
     
     # Run the background generator and orchestrator side-by-side
     await asyncio.gather(
-        flight_generator_worker(flight_ingestion_queue, spawn_rate_seconds=2.5),
-        engine_orchestrator(flight_ingestion_queue),
+        flight_generator_worker(atc_broker, spawn_rate_seconds=2.5),
+        engine_orchestrator(atc_broker),
         passenger_loader_worker()
     )
 

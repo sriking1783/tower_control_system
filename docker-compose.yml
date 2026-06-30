@@ -1,0 +1,21 @@
+services:
+  atc_message_broker:
+    image: rabbitmq:3.13-management # Or your current image
+    container_name: atc_message_broker
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+
+  atc_simulation_app:
+    build: .
+    container_name: atc_simulation_app
+    environment:
+      - RABBITMQ_HOST=atc_message_broker
+    depends_on:
+      atc_message_broker:
+        condition: service_healthy

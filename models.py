@@ -2,25 +2,24 @@ from enum import Enum, auto
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 from dataclasses import dataclass, field
+from pydantic import BaseModel, Field
 
-class FlightState(Enum):
-    """The strict lifecycle states of an aircraft process."""
-    
-    AIRSPACE = auto()         # En route in the sky
-    HOLDING = auto()          # In a holding pattern loop
-    LANDING = auto()          # Touching down on the inbound runway
-    TAXI_TO_GATE = auto()     # Navigating taxiways toward terminal
-    GATE_DEPLANING = auto()   # UNLOADING arriving passengers (New)
-    GATE_BOARDING = auto()    # LOADING departing passengers (New)
-    TAXI_TO_RUNWAY = auto()   # Navigating taxiways toward departure runway
-    TAKEOFF = auto()          # Blasting off into the sky
+class FlightState(str, Enum):
+    AIRSPACE = "AIRSPACE" # En route in the sky
+    HOLDING = "HOLDING" # In a holding pattern loop
+    LANDING = "LANDING" # Touching down on the inbound runway
+    TAXI_TO_GATE = "TAXI_TO_GATE" # Navigating taxiways toward terminal
+    GATE_DEPLANING = "GATE_DEPLANING" # UNLOADING arriving passengers (New)
+    GATE_BOARDING = "GATE_BOARDING"  # LOADING departing passengers (New)
+    TAXI_TO_RUNWAY = "TAXI_TO_RUNWAY" # Navigating taxiways toward departure runway
+    TAKEOFF = "TAKEOFF" # Blasting off into the sky
 
 
-class AircraftType(Enum):
-    LIGHT_PROP = auto()
-    REGIONAL_JET = auto()
-    NARROW_BODY = auto()
-    WIDE_BODY = auto()
+class AircraftType(str, Enum):
+    LIGHT_PROP = "LIGHT_PROP"
+    REGIONAL_JET = "REGIONAL_JET"
+    NARROW_BODY = "NARROW_BODY"
+    WIDE_BODY = "WIDE_BODY"
     
 AIRCRAFT_CAPACITY_MAP = {
     AircraftType.LIGHT_PROP: 5,
@@ -45,16 +44,19 @@ class GlobalSimulationState:
         }
 
 
-class Flight:
-    def __init__(self, flight_id: str, aircraft_type: AircraftType, initial_location: str):
-        self.flight_id = flight_id
-        self.aircraft_type = aircraft_type
-        self.state = FlightState.AIRSPACE
-        
-        # Track position by the current node's string identifier key
-        self.current_location: str = initial_location 
-        self.max_capacity = AIRCRAFT_CAPACITY_MAP[aircraft_type]
-        self.passengers_onboard = 0
+class Flight(BaseModel):
+    flight_id: str
+    aircraft_type: AircraftType
+    current_location: str
+    state: FlightState = FlightState.AIRSPACE
+    passengers_onboard: int = 0
+    
+    # You can compute max_capacity automatically on initialization
+    max_capacity: int = 0
+
+    def model_post_init(self, __context):
+        # Automatically set capacity after the model initializes
+        self.max_capacity = AIRCRAFT_CAPACITY_MAP[self.aircraft_type]
 
 
 class ResourceType(Enum):
@@ -134,13 +136,13 @@ class AirportNetwork:
             self.nodes = nodes
         else:
             self.nodes: Dict[str, AirportNode] = {
-                "Airspace_Alpha": AirportNode("Airspace_Alpha", ResourceType.PIPELINE, 999),
-                "Runway_09R":     AirportNode("Runway_09R",     ResourceType.MONOLITHIC, 1),
+                "Airspace_Alpha": AirportNode(name="Airspace_Alpha", resource_type=ResourceType.PIPELINE, max_capacity=999),
+                "Runway_09R":     AirportNode(name="Runway_09R",     resource_type=ResourceType.MONOLITHIC, max_capacity=1),
                 "Gate_C4":        Gate(name="Gate_C4",        resource_type=ResourceType.MONOLITHIC, max_capacity=1, passenger_count=250),
                 "Gate_E1":        Gate(name="Gate_E1",        resource_type=ResourceType.MONOLITHIC, max_capacity=1, passenger_count=200),
-                "Taxiway_Zulu":   AirportNode("Taxiway_Zulu",   ResourceType.PIPELINE, 3),
-                "Runway_09L":     AirportNode("Runway_09L",     ResourceType.MONOLITHIC, 1),
-                "Departure_Hub":  AirportNode("Departure_Hub",  ResourceType.PIPELINE, 999)
+                "Taxiway_Zulu":   AirportNode(name="Taxiway_Zulu",   resource_type=ResourceType.PIPELINE, max_capacity=3),
+                "Runway_09L":     AirportNode(name="Runway_09L",     resource_type=ResourceType.MONOLITHIC, max_capacity=1),
+                "Departure_Hub":  AirportNode(name="Departure_Hub",  resource_type=ResourceType.PIPELINE, max_capacity=999)
             }
             
             # Wire the Directed Graph Connections

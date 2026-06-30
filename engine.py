@@ -3,6 +3,7 @@ import random
 import string
 from typing import List
 from models import Flight, AircraftType, FlightState
+from broker import ATCEventBroker
 
 MOCK_ROUTE: List[str] = [
     # ---- INBOUND LEG ----
@@ -27,7 +28,7 @@ def generate_random_flight_id() -> str:
     return f"{airline}-{digits}"
 
 
-async def flight_generator_worker(queue: asyncio.Queue, spawn_rate_seconds: float = 3.0):
+async def flight_generator_worker(broker: ATCEventBroker, spawn_rate_seconds: float = 3.0):
     """
     Background worker that continuously streams new flights into the engine queue.
     Simulates the chaotic arrival of real-world air traffic.
@@ -35,16 +36,23 @@ async def flight_generator_worker(queue: asyncio.Queue, spawn_rate_seconds: floa
     print(f"[SYSTEM] Flight generator initialized. Spawning every {spawn_rate_seconds}s...")
     
     while True:
-        flight_id = generate_random_flight_id()
-        aircraft_type = random.choice(list(AircraftType))
-        
-        new_flight = Flight(
-            flight_id = flight_id,
-            aircraft_type = aircraft_type,
-            initial_location="Airspace_Alpha" 
-        )
-        
-        # Safely push the payload into the asyncio communication channel
-        await queue.put(new_flight)
-        print(f"[SPAWNER] New flight {new_flight.flight_id} ({new_flight.aircraft_type.name}) entered airspace.%")
-        await asyncio.sleep(spawn_rate_seconds)
+        try:
+            flight_id = generate_random_flight_id()
+            aircraft_type = random.choice(list(AircraftType))
+            
+            new_flight = Flight(
+                flight_id = flight_id,
+                aircraft_type = aircraft_type,
+                current_location="Airspace_Alpha" 
+            )
+            
+            # Safely push the payload into the asyncio communication channel
+            flight_data = new_flight.model_dump()
+            await broker.publish_event(
+                routing_key="atc.inbound.ingest",
+                payload=flight_data)
+            print(f"[SPAWNER] New flight {new_flight.flight_id} ({new_flight.aircraft_type.name}) entered airspace.%")
+            await asyncio.sleep(spawn_rate_seconds)
+        except asyncio.CancelledError:
+            print("[SPAWNER] Worker shutting down cleanly.")
+            break
