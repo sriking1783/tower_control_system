@@ -4,10 +4,16 @@ from models import Flight, FlightState, AirportNetwork, ResourceType, AIRCRAFT_C
 from engine import flight_generator_worker
 from router import Router
 import state
+import os
 import random
 from broker import ATCEventBroker
+from redis import asyncio as aioredis
 from aio_pika import IncomingMessage
 import json
+
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+redis_client = aioredis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 async def acquire_graph_resources(flight: Flight, target_node_name: str) -> bool:
     """
@@ -16,27 +22,64 @@ async def acquire_graph_resources(flight: Flight, target_node_name: str) -> bool
     Looks ahead at downstream destinations to prevent gridlock or high-speed collisions.
     """
     target_node = state.airport_network.nodes[target_node_name]
-   
-    # Rule 1: Verify immediate capacity limits
-    current_occupied = state.global_simulation_state.registry.setdefault(target_node_name, [])
-    if len(current_occupied) >= target_node.max_capacity:
+    flight_id = flight.flight_id
+    target_key = f"registry:{target_node_name}"
+
+    # Rule 1: Verify immediate capacity limits using standard Redis call
+    current_count = await redis_client.llen(target_key)
+    if current_count >= target_node.max_capacity:
         return False
     
     # Rule 2: Moving Bubble look-ahead safety buffer
-    # If stepping onto a landing or takeoff runway, check if the paths exiting it are completely locked up
     if target_node.resource_type == ResourceType.MONOLITHIC and "Runway" in target_node_name:
         downstream_options = target_node.destinations
         downstream_runways = [
-            opt for opt in downstream_options 
+            opt for opt in downstream_options
             if "Runway" in opt.name or opt.resource_type == ResourceType.MONOLITHIC
         ]
-        # If all paths leading out of this runway are completely backed up to maximum capacity, 
-        # deny permission to enter the runway block to prevent gridlock.
-        if downstream_runways and all(len(state.global_simulation_state.registry[opt.name]) >= opt.max_capacity for opt in downstream_runways):
-            return False
+        if downstream_runways:
+            downstream_keys = [f"registry:{opt.name}" for opt in downstream_runways]
+            
+            # Fetch all lengths concurrently over the connection pool (fast & clean)
+            lengths = await asyncio.gather(*(redis_client.llen(key) for key in downstream_keys))
+            
+            # If ALL outbound runways/nodes are completely maxed out, deny entry
+            all_backed_up = True
+            for idx, opt in enumerate(downstream_runways):
+                if idx < len(lengths):
+                    if lengths[idx] < opt.max_capacity:
+                        all_backed_up = False
+                        break
+                else:
+                    return False
+            
+            if all_backed_up:
+                return False
+
+    # 3. Use the pipeline exactly what it's meant for: An atomic transaction block
+    async with redis_client.pipeline(transaction=True) as pipe:
+        try:
+            # 1. Watch the target node registry to catch concurrent mutations
+            await pipe.watch(target_key)
+            
+            # Double check capacity one last time under the WATCH lock guard
+            current_count = await pipe.llen(target_key)
+            if current_count >= target_node.max_capacity:
+                await pipe.unwatch()
+                return False
     
-    state.global_simulation_state.registry[target_node_name].append(flight.flight_id)
-    return True
+            # 2. Re-open pipeline for the atomic write transaction block
+            pipe.multi()
+            pipe.rpush(target_key, flight_id)
+            await pipe.execute()
+            return True
+            
+        except aioredis.WatchError:
+            # Another instance claimed the space while we calculated. Back off and retry.
+            return False
+            
+   
+    
         
 
 async def passenger_loader_worker(boarding_rate_seconds: float = 0.2):
@@ -50,19 +93,23 @@ async def passenger_loader_worker(boarding_rate_seconds: float = 0.2):
         for flight in active_flights:
             gate_name = flight.current_location
             if "Gate" in flight.current_location and flight.state == FlightState.GATE_BOARDING:
-                available_at_gate = state.global_simulation_state.gate_passenger_pool.get(gate_name, 0)
+                gate_pool_key = f"passenger_pool:{gate_name}"
+                
+                # Fetch live pool count from Redis
+                pool_val = await redis_client.get(gate_pool_key)
+                available_at_gate = int(pool_val) if pool_val else 0
                 remaining_seats = flight.max_capacity - flight.passengers_onboard
                 if remaining_seats > 0 and available_at_gate > 0:
                     # The absolute maximum we can board is bounded by the lounge population!
                     group_size = min(random.randint(5, 15), remaining_seats, available_at_gate)
                     
                     # Transaction: Move passengers from the lounge room onto the aircraft
-                    state.global_simulation_state.gate_passenger_pool[gate_name] -= group_size
+                    await redis_client.decrby(gate_pool_key, group_size)
                     flight.passengers_onboard += group_size
                     
                     print(f"[Gate Agent] Boarded {group_size} from {gate_name} pool. "
                           f"Plane: {flight.passengers_onboard}/{flight.max_capacity} | "
-                          f"Lounge Remaining: {state.global_simulation_state.gate_passenger_pool[gate_name]}")
+                          f"Lounge Remaining: {available_at_gate - group_size}")
                           
                 elif available_at_gate == 0 and remaining_seats > 0:
                     print(f"[WARNING] Boarding stalled for [{flight.flight_id}] at {gate_name}! "
@@ -77,24 +124,33 @@ async def manage_flight_lifecycle(flight: Flight):
     stepping linearly through its track route.
     """
     flight_id = flight.flight_id
+    current_node_name = flight.current_location
+    initial_key = f"registry:{current_node_name}"
     # Bootstrap Entry: Place the flight onto its initial starting position
-    if flight_id not in state.global_simulation_state.registry[flight.current_location]:
-        state.global_simulation_state.registry[flight.current_location].append(flight_id)
+    current_line_ids = await redis_client.lrange(initial_key, 0, -1)
+    if flight_id not in current_line_ids:
+        await redis_client.rpush(initial_key, flight_id)
     
 
     while True:
-        current_node_name = flight.current_location
         current_node_obj = state.airport_network.nodes[current_node_name]
         # 1. Check for Absolute Edge Nodes (End of the entire Airport Graph)
         # We look at the static graph structure itself, NOT the live runtime options!
         if not current_node_obj.destinations:
             # We are at Departure_Hub. Clean up and exit.
-            if flight_id in state.global_simulation_state.registry[current_node_name]:
-                state.global_simulation_state.registry[current_node_name].remove(flight_id)
+            await redis_client.lrem(f"registry:{current_node_name}", 1, flight_id)
             break
+        
         # 2. Query live options based on current runtime airport traffic
         forward_options = Router.get_valid_next_options(state.airport_network, current_node_name)
-        target_node_name = Router.select_optimal_next_node(flight, forward_options, state.global_simulation_state.registry)
+        
+        # System Design Optimization: Router expects a dict, so build a snapshot from Redis
+        # (Alternatively, you can modify Router later to take a Redis client directly)
+        registry_snapshot = {}
+        for opt in forward_options:
+            registry_snapshot[opt.name] = await redis_client.lrange(f"registry:{opt.name}", 0, -1)
+            
+        target_node_name = Router.select_optimal_next_node(flight, forward_options, registry_snapshot)
         # 3. Hold/Brake Lock: If forward options exist but are packed solid, wait.
         if target_node_name is None:
             if flight.state != FlightState.HOLDING and current_node_name == "Airspace_Alpha":
@@ -106,8 +162,7 @@ async def manage_flight_lifecycle(flight: Flight):
         # 4. Atomic Two-Phase Lock Transaction Step
         if await acquire_graph_resources(flight, target_node_name):
             # Crucial: Remove yourself from the old node's registry array BEFORE updating your location
-            if flight_id in state.global_simulation_state.registry[current_node_name]:
-                state.global_simulation_state.registry[current_node_name].remove(flight_id)
+            await redis_client.lrem(f"registry:{current_node_name}", 1, flight_id)
             
             # Commit the step forward
             flight.current_location = target_node_name
@@ -121,7 +176,8 @@ async def manage_flight_lifecycle(flight: Flight):
         if current_node_name in state.NODE_STATE_MAP and flight.state != FlightState.GATE_BOARDING:
             flight.state = state.NODE_STATE_MAP[current_node_name]
 
-        print(f"[{flight_id}] State: {flight.state.name:<15} | Location: {current_node_name:<22} | Line: {str(state.global_simulation_state.registry[current_node_name]):<25}")
+        live_line = await redis_client.lrange(f"registry:{current_node_name}", 0, -1)
+        print(f"[{flight_id}] State: {flight.state.name:<15} | Location: {current_node_name:<22} | Line: {str(live_line):<25}")
         
         # 6. Operational Transit & Handling Delay Engine
         if "Gate" in current_node_name:
@@ -130,8 +186,10 @@ async def manage_flight_lifecycle(flight: Flight):
                 flight.state = FlightState.GATE_BOARDING
                 print(f"[{flight_id}] State: {flight.state.name:<15} | Location: {current_node_name:<22} | Boarding Initialized.")
             
-            print(f"[{flight_id}] State: {flight.state.name:<15} | Location: {current_node_name:<22} | Turnaround Complete")
-            available_at_gate = state.global_simulation_state.gate_passenger_pool.get(current_node_name, 0)
+            gate_pool_key = f"passenger_pool:{current_node_name}"
+            pool_val = await redis_client.get(gate_pool_key)
+            available_at_gate = int(pool_val) if pool_val else 0
+            
             # Check conditions: Is the plane full, or is the gate empty
             print(flight.passengers_onboard, flight.max_capacity, available_at_gate)
             if flight.passengers_onboard >= flight.max_capacity or available_at_gate == 0:
@@ -195,6 +253,11 @@ async def main():
     print("[SYSTEM] Booting Dynamic Graph Network Air Traffic Controller Engine...")
     await atc_broker.connect()
     print("[SYSTEM] Successfully connected to RabbitMQ Infrastructure Event Mesh.")
+
+    await redis_client.flushdb()
+    
+    await redis_client.set("passenger_pool:Gate_C4", 100)
+    await redis_client.set("passenger_pool:Gate_E1", 75)
     
     # Run the background generator and orchestrator side-by-side
     await asyncio.gather(

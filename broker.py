@@ -12,6 +12,7 @@ class ATCEventBroker:
         self.connection = None
         self.channel = None
         self.exchange = None
+        self.dlx_exchange = None
     
     async def connect(self):
         retry_interval = 2
@@ -28,6 +29,16 @@ class ATCEventBroker:
                     type=aio_pika.ExchangeType.TOPIC,
                     durable=True,
                 )
+                
+                self.dlx_exchange = await self.channel.declare_exchange(
+                    "atc.dlx",
+                    type=aio_pika.ExchangeType.DIRECT,
+                    durable=True,
+                )
+                
+                dlq = await self.channel.declare_queue("atc.dead_letter_queue", durable=True)
+                await dlq.bind(self.dlx_exchange, routing_key="poison_pill")
+                
                 print("Successfully connected to RabbitMQ and declared 'atc.telemetry' exchange.")
                 break # Exit the loop once fully initialized
                 
@@ -56,8 +67,16 @@ class ATCEventBroker:
         if not self.channel or not self.exchange:
             raise RuntimeError("Broker is not initialized. Call connect() first.")
         
+        # Define under-the-hood argument flags telling RabbitMQ exactly what to do 
+        # if a message expires due to TTL or gets explicitly rejected with requeue=False.
+        queue_arguments = {
+            "x-dead-letter-exchange": "atc.dlx",
+            "x-dead-letter-routing-key": "poison_pill",
+            "x-message-ttl": 45000  # 45-second fallback: drop to DLQ if worker grinds to a halt
+        }
+        
         # 1. Declare the persistent queue
-        queue = await self.channel.declare_queue(queue_name, durable=True)
+        queue = await self.channel.declare_queue(queue_name, durable=True, arguments=queue_arguments)
         # 2. Match the routing pattern your spawner uses
         # If your spawner uses "atc.inbound.ingest", bind exactly to it.
         # If you want this queue to grab EVERYTHING, you could use "atc.#"

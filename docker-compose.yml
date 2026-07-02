@@ -11,11 +11,26 @@ services:
       timeout: 5s
       retries: 3
 
+  atc_redis_state:
+    image: redis:7-alpine
+    container_name: atc_redis_state
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
   atc_simulation_app:
     build: .
     container_name: atc_simulation_app
     environment:
       - RABBITMQ_HOST=atc_message_broker
+      - REDIS_HOST=atc_redis_state
     depends_on:
       atc_message_broker:
+        condition: service_healthy
+      atc_redis_state:
+        # <-- Add this so the app waits for Redis too
         condition: service_healthy
